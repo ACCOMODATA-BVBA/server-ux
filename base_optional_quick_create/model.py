@@ -17,4 +17,30 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 ##############################################################################
-import model
+
+from openerp.osv import orm
+
+class ir_model(orm.Model):
+
+    _inherit = 'ir.model'
+
+    def _wrap_name_create(self, old_create, model):
+        
+        def wrapper(cr, uid, name, context=None):
+            import pdb; pdb.set_trace()
+            return old_create(cr, uid, name, context=context)
+
+        return wrapper
+
+    def _register_hook(self, cr, ids=None):
+        model = 'res.partner'
+        model_obj = self.pool.get(model)
+        if not hasattr(model_obj, 'check_quick_create'):
+            model_obj.name_create = self._wrap_name_create(model_obj.name_create, model)
+            model_obj.check_quick_create = True
+        return True
+
+    def name_create(self, cr, uid, name, context=None):
+        res = super(ir_model, self).name_create(cr, uid, name, context=context)
+        self._register_hook(cr, [res])
+        return res

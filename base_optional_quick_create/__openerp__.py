@@ -17,4 +17,23 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 ##############################################################################
-import model
+
+{
+    'name': "Optional quick create",
+    'version': '0.1',
+    'category': 'Tools',
+    'description': """
+
+""",
+    'author': 'Agile Business Group',
+    'website': 'http://www.agilebg.com',
+    'license': 'AGPL-3',
+    "depends": ['base'],
+    "data": [
+    ],
+    "demo": [],
+    'test': [
+    ],
+    "active": False,
+    "installable": True
+}
