@@ -38,17 +38,6 @@ class TierValidation(models.AbstractModel):
     has_comment = fields.Boolean(
         compute='_compute_has_comment',
     )
-    approve_sequence = fields.Boolean(
-        compute='_compute_approve_sequence',
-    )
-
-    @api.multi
-    def _compute_approve_sequence(self):
-        for rec in self:
-            approve_sequence = rec.review_ids.filtered(
-                lambda r: r.status in ('pending', 'rejected') and
-                (self.env.user in r.reviewer_ids)).mapped('approve_sequence')
-            rec.approve_sequence = True in approve_sequence
 
     @api.multi
     def _compute_has_comment(self):
@@ -58,20 +47,30 @@ class TierValidation(models.AbstractModel):
                 (self.env.user in r.reviewer_ids)).mapped('has_comment')
             rec.has_comment = True in has_comment
 
+    def _check_approve_sequence(self, user):
+        if user not in self.reviewer_ids:
+            # If user is not a reviewer, he cannot approve
+            return False
+        reviews = self.review_ids.filtered(
+            lambda r: r.status in ('pending', 'rejected') and
+            (user in r.reviewer_ids))
+        if reviews.filtered(lambda r: not r.approve_sequence):
+            # If a review does not need a sequence, he can approve
+            return True
+        sequence = reviews.mapped('sequence')
+        sequence.sort()
+        my_sequence = sequence[0]
+        if self.review_ids.filtered(
+            lambda r: r.status != 'approved' and r.sequence < my_sequence
+        ):
+            # A review has not been approved
+            return False
+        return True
+
     @api.multi
     def _compute_can_review(self):
         for rec in self:
-            rec.can_review = self.env.user in rec.reviewer_ids
-            if rec.can_review and rec.approve_sequence:
-                sequence = rec.review_ids.filtered(
-                    lambda r: r.status in ('pending', 'rejected') and
-                    (self.env.user in r.reviewer_ids)).mapped('sequence')
-                sequence.sort()
-                my_sequence = sequence[0]
-                tier_bf = rec.review_ids.filtered(
-                    lambda r: r.status != 'approved' and r.sequence < my_sequence)
-                if tier_bf:
-                    rec.can_review = False
+            rec.can_review = rec._check_approve_sequence(self.env.user)
 
     @api.multi
     @api.depends('review_ids')
@@ -94,6 +93,7 @@ class TierValidation(models.AbstractModel):
         reviews = self.env['tier.review'].search([
             ('model', '=', self._name),
             ('reviewer_ids', operator, value),
+            ('can_review', '=', True),
             ('status', '=', 'pending')])
         return [('id', 'in', list(set(reviews.mapped('res_id'))))]
 
@@ -134,7 +134,7 @@ class TierValidation(models.AbstractModel):
     @api.model
     def _get_under_validation_exceptions(self):
         """Extend for more field exceptions."""
-        return ['message_follower_ids']
+        return ['message_follower_ids', 'message_main_attachment_id']
 
     @api.multi
     def _check_allow_write_under_validation(self, vals):
@@ -187,11 +187,17 @@ class TierValidation(models.AbstractModel):
             rec = self.env[review.model].browse(review.res_id)
             rec._notify_accepted_reviews()
 
+    def _get_accepted_notification_subtype(self):
+        return 'base_tier_validation.mt_tier_validation_accepted'
+
+    def _get_rejected_notification_subtype(self):
+        return 'base_tier_validation.mt_tier_validation_rejected'
+
     def _notify_accepted_reviews(self):
         if hasattr(self, 'message_post'):
             # Notify state change
             getattr(self, 'message_post')(
-                subtype='mt_comment',
+                subtype=self._get_accepted_notification_subtype(),
                 body=self._notify_accepted_reviews_body()
             )
 
@@ -258,7 +264,7 @@ class TierValidation(models.AbstractModel):
         if hasattr(self, 'message_post'):
             # Notify state change
             getattr(self, 'message_post')(
-                subtype='mt_comment',
+                subtype=self._get_rejected_notification_subtype(),
                 body=self._notify_rejected_review_body()
             )
 
@@ -330,7 +336,12 @@ class TierValidation(models.AbstractModel):
 
     @api.model
     def _update_counter(self):
+        self.review_ids._compute_can_review()
         notifications = []
         channel = 'base.tier.validation'
         notifications.append([channel, {}])
         self.env['bus.bus'].sendmany(notifications)
+
+    def unlink(self):
+        self.mapped('review_ids').unlink()
+        return super().unlink()
